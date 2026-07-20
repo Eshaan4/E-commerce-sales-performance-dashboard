@@ -1,0 +1,20 @@
+# ── Core (pinned to Airflow 2.8.1 constraints) ──────────────
+pandas==2.1.4
+sqlalchemy==1.4.51          # Airflow 2.8.1 requires < 2.0
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+
+# ── Data Ingestion ───────────────────────────────────────────
+lxml==5.1.0
+xmltodict==0.13.0
+requests==2.31.0
+
+# ── Utilities ────────────────────────────────────────────────
+faker==22.2.0
+colorlog==4.8.0             # Airflow 2.8.1 requires < 5.0
+tabulate==0.9.0
+numpy==1.26.3
+matplotlib==3.8.2
+
+# ── Airflow (installed in Docker image separately) ────────────
+# apache-airflow==2.8.1

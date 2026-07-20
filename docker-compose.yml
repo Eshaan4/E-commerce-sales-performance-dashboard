@@ -1,0 +1,195 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared Airflow configuration (uses our custom Dockerfile)
+# ─────────────────────────────────────────────────────────────────────────────
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment:
+    # Airflow Core
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://de_user:de_password123@postgres:5432/de_poc
+    AIRFLOW__CORE__FERNET_KEY: 46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLt0nKmkI=
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__WEBSERVER__SECRET_KEY: supersecretkey123
+    AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+    # Database connection (for pipeline modules)
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: de_poc
+    POSTGRES_USER: de_user
+    POSTGRES_PASSWORD: de_password123
+    # Pipeline paths (inside container)
+    DATA_RAW_PATH: /opt/airflow/data/raw
+    DATA_REJECTED_PATH: /opt/airflow/data/rejected
+    GE_ROOT_DIR: /opt/airflow/great_expectations
+    PIPELINE_LOG_LEVEL: INFO
+    PYTHONPATH: /opt/airflow
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./data:/opt/airflow/data
+    - ./scripts:/opt/airflow/scripts
+    - ./sql:/opt/airflow/sql
+    - ./great_expectations:/opt/airflow/great_expectations
+    - ./logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - de_network
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Services
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+
+  # ───────────────────────────────────────────────────────────
+  # 1. PostgreSQL  (Bronze / Silver / Gold / Metadata schemas)
+  # ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: de_poc_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: de_poc
+      POSTGRES_USER: de_user
+      POSTGRES_PASSWORD: de_password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # SQL files auto-run in alphabetical order on first DB creation
+      - ./sql/01_bronze_schema.sql:/docker-entrypoint-initdb.d/01_bronze_schema.sql:ro
+      - ./sql/02_silver_schema.sql:/docker-entrypoint-initdb.d/02_silver_schema.sql:ro
+      - ./sql/03_gold_schema.sql:/docker-entrypoint-initdb.d/03_gold_schema.sql:ro
+      - ./sql/04_metadata_schema.sql:/docker-entrypoint-initdb.d/04_metadata_schema.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "de_user", "-d", "de_poc"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - de_network
+
+  # ───────────────────────────────────────────────────────────
+  # 2. Pipeline Bootstrap
+  #    - Generates sample data (CSV / JSON / XML)
+  #    - Waits for DB, then verifies schemas exist
+  # ───────────────────────────────────────────────────────────
+  pipeline-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: de_poc_pipeline_init
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: de_poc
+      POSTGRES_USER: de_user
+      POSTGRES_PASSWORD: de_password123
+      DATA_RAW_PATH: /opt/airflow/data/raw
+      DATA_REJECTED_PATH: /opt/airflow/data/rejected
+      PYTHONPATH: /opt/airflow
+    volumes:
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - ./scripts:/opt/airflow/scripts
+      - ./sql:/opt/airflow/sql
+    working_dir: /opt/airflow
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "=== Generating sample data ===" &&
+        python scripts/generate_sample_data.py &&
+        echo "=== Verifying DB schemas ===" &&
+        python scripts/init_pipeline.py &&
+        echo "=== Pipeline bootstrap complete! ==="
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - de_network
+
+  # ───────────────────────────────────────────────────────────
+  # 3. Airflow – DB Init + Admin User
+  # ───────────────────────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: de_poc_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "=== Initialising Airflow DB ===" &&
+        airflow db migrate &&
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@depoc.com \
+          --password admin123 || true &&
+        echo "=== Airflow init complete! ==="
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pipeline-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ───────────────────────────────────────────────────────────
+  # 4. Airflow Scheduler
+  # ───────────────────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: de_poc_scheduler
+    command: scheduler
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ───────────────────────────────────────────────────────────
+  # 5. Airflow Webserver
+  # ───────────────────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: de_poc_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Volumes & Networks
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  de_network:
+    driver: bridge

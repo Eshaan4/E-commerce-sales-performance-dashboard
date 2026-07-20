@@ -1,0 +1,68 @@
+# =============================================================
+# Data Engineering PoC – .gitignore
+# =============================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+.Python
+env/
+venv/
+.venv/
+pip-wheel-metadata/
+*.whl
+
+# Environment & Secrets
+.env
+*.env.local
+*.env.*.local
+
+# Data files (generated at runtime)
+data/raw/*.csv
+data/raw/*.json
+data/raw/*.xml
+data/rejected/
+data/powerbi_data/
+powerbi_data/
+!data/raw/.gitkeep
+!data/rejected/.gitkeep
+
+# Logs
+logs/
+*.log
+!logs/.gitkeep
+
+# Architecture PNG (generated at runtime)
+architecture/*.png
+
+# Great Expectations
+great_expectations/uncommitted/
+great_expectations/.ge_store_backend_id
+
+# Docker
+.dockerignore
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Airflow
+airflow.cfg
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# Debug scripts (temporary)
+scripts/debug_*.py
+
+# Dashboard logo (binary asset)
+# dashboard_logo.png  ← we KEEP this in repo
