@@ -28,7 +28,6 @@ data/raw/*.csv
 data/raw/*.json
 data/raw/*.xml
 data/rejected/
-data/powerbi_data/
 powerbi_data/
 !data/raw/.gitkeep
 !data/rejected/.gitkeep
